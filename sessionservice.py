@@ -2,11 +2,11 @@ from cassandra.cluster import Cluster
 
 class PlayerSessionService(object):
 
-    def __init__(self, cluster_address=None, keyspace=None):
+    def __init__(self, keyspace, cluster_address=None):
         """ Initializes a service that consumes player sessions from a Cassandra cluster.
             Arguments:
+                keyspace (string) : sets the default the keyspace for all queries
                 cluster_address=None : an array of IP addresses to cluster nodes
-                keyspace=None : sets the default the keyspace for all queries
         """
 
         if cluster_address is not None:
@@ -14,12 +14,21 @@ class PlayerSessionService(object):
         else:
             self.cluster = Cluster()
         
-        if keyspace is not None:
-            self.session = self.cluster.connect(keyspace)
-        else:
-            self.session = self.cluster.connect()
+        # Use the keyspace
+        self.session = self.cluster.connect()
+        self.session.execute("""
+            CREATE KEYSPACE IF NOT EXISTS %s
+            WITH replication = {'class' : 'SimpleStrategy', 'replication_factor' : 3};
+            """ % (keyspace))
+        
 
 if __name__ == "__main__":
     print("Performs basic test")
 
-    pss = PlayerSessionService()
+    pss = PlayerSessionService('tutorialspoint')
+
+    # pss.session.execute("USE tutorialspoint;")
+
+    pss.session.execute("SELECT * FROM system_schema.keyspaces;")
+
+    
