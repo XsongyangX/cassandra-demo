@@ -206,10 +206,13 @@ if __name__ == "__main__":
         """
         e3 = """
             {
-                "life":3
+                "event":"end",
+                "player_id":"testtest",
+                "session_id":"7a7c77c7-c43a-42ff-ba55-67563dfa35d4",
+                "ts":"2019-12-12T12:12:12.121212"
             }
         """
-        my_events = [e1, e2]
+        my_events = [e1, e2, e3]
         pss.receive_events(json.dumps(my_events))
 
     test_receive()
