@@ -12,6 +12,9 @@ class PlayerSessionService(object):
                 cluster_address=None : an array of IP addresses to cluster nodes
         """
 
+        # For multithreading
+        self.futures = []
+
         # May need to authenticate
         if cluster_address is not None:
             self.cluster = Cluster(cluster_address)
@@ -70,9 +73,13 @@ class PlayerSessionService(object):
     
     def receive_events(self, sessions):
         """ Receives a batch of events in encoded json objects to insert into the database
+            
             A batch has size of maximum 10 and minimum 1
+            
             Takes:
                 sessions: a json object containing a list of session events
+            
+            Note: The timestamp must be formatted as a string like "2016-12-02T22:49:05.520022"
         """
         # convert json encoding to python
         sessions = yaml.safe_load(sessions)
@@ -137,11 +144,11 @@ class PlayerSessionService(object):
                     # start time is later than end time
                     if not row.start_time < row.end_time:
                         raise AttributeError(
-                            "Start timestamp is later than end timestamp in session_id: %s"
-                            % (decoded['session_id']))
+                            "Start timestamp %s is later than end timestamp %s in session_id: %s"
+                            % (row.start_time, row.end_time, decoded['session_id']))
 
                     # insert this session into the completed table
-                    self.session.execute_async("""
+                    self.futures.append(self.session.execute_async("""
                         INSERT INTO %s ( player_id, session_id, country, start_time, end_time)
                         VALUES (
                             '%s', %s, '%s', '%s', '%s'
@@ -153,16 +160,17 @@ class PlayerSessionService(object):
                         row.country,
                         str(row.start_time)[:-3],
                         str(row.end_time)[:-3],
-                        PlayerSessionService.YEAR_IN_SECONDS))
+                        PlayerSessionService.YEAR_IN_SECONDS)))
 
                     # delete the complete session from the incomplete table
                     cql_delete = "DELETE FROM %s WHERE player_id='%s' AND session_id=%s;"\
                         % (self.incomplete, row.player_id, str(row.session_id))
-                    self.session.execute_async(cql_delete)
+                    self.futures.append(self.session.execute_async(cql_delete))
                     
 
     def fetch(self, player_id):
         """ Returns the last 20 completed sessions for the given player
+
             Takes:
                 player_id: a string representing the player
             Return type is a JSON object:
@@ -170,13 +178,21 @@ class PlayerSessionService(object):
                 start_time:'start timestamp', end_time:'end timestamp'}
         """
         result = self.session.execute("""
-            SELECT * FROM %s
-            WHERE player_id=%s
+            SELECT JSON * FROM %s
+            WHERE player_id='%s'
             LIMIT 20;
             """ % (self.completed, player_id))
 
-        return json.dumps(result)
+        return json.dumps(list(result))
             
+    def shutdown(self):
+        """ Shuts down the service by waiting for all threads to finish
+        """
+        def handle_error(error):
+            print("Async execution error: %s" % str(error))
+
+        for thread in self.futures:
+            thread.add_errback(handle_error)
 
 
 if __name__ == "__main__":
@@ -212,7 +228,36 @@ if __name__ == "__main__":
                 "ts":"2019-12-12T12:12:12.121212"
             }
         """
-        my_events = [e1, e2, e3]
+        e4 = """
+            {
+                "event":"end",
+                "player_id":"0a2d12a1a7e145de8bae44c0c6e06629",
+                "session_id":"4f0f43f9-c43a-42ff-ba55-67563dfa35d4",
+                "ts":"2018-12-02T12:55:05.520022"
+            }
+        """
+        e5 = """
+            {
+                "event":"start",
+                "country": "US",
+                "player_id":"0a2d12a1a7e145de8bae44c0c6e06629",
+                "session_id":"4f0f43f9-c43a-42ff-ba55-67563dfa35d4",
+                "ts":"2018-12-02T12:49:05.520022"
+            }
+        """
+        my_events = [e1, e2, e3, e4, e5]
         pss.receive_events(json.dumps(my_events))
 
     test_receive()
+
+    # test the fetch function
+    def test_fetch():
+        player_id = "0a2d12a1a7e145de8bae44c0c6e06629"
+
+        result = pss.fetch(player_id)
+
+        print(yaml.safe_load(result))
+    
+    test_fetch()
+
+    pss.shutdown()
