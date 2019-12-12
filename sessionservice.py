@@ -1,5 +1,5 @@
 from cassandra.cluster import Cluster
-import json
+import json, yaml
 
 class PlayerSessionService(object):
 
@@ -71,66 +71,111 @@ class PlayerSessionService(object):
     def receive_events(self, sessions):
         """ Receives a batch of events in encoded json objects to insert into the database
             A batch has size of maximum 10 and minimum 1
+            Takes:
+                sessions: a json object containing a list of session events
         """
+        # convert json encoding to python
+        sessions = yaml.safe_load(sessions)
 
         # verify batch size
         if len(sessions) == 0 or len(sessions) > 10:
             raise AttributeError("Batch size is 0 or greater than 10: size %d" % (len(sessions)))
 
-        # convert json encoding to python
-        for session in sessions:
-            decoded = json.loads(session)
-
+        for decoded in sessions:
+            decoded = yaml.safe_load(decoded)
+            
             # verify json object schema and integrity
-            event_type = "end"
             keys = decoded.keys()
             if len(keys) > 5 or len(keys) == 0:
                 raise AttributeError("JSON object has incompatible schema")
             for key in keys:
-                if key is "event" and decoded[key] is "start":
-                    event_type = "start"
                 if key not in ['event', 'country', 'player_id', 'session_id', 'ts']:
                     raise AttributeError("JSON object has incompatible key: %s" % (key))
             
             # Insert into incomplete table
-            cql_request = ""
+            cql_insert = ""
             
             # Start event
-            if event_type == "start":
-                cql_request = """
+            if decoded['event'] == 'start':
+                cql_insert = """
                     INSERT INTO %s (player_id, session_id, country, start_time) 
-                    VALUES ('%s', %s, %s, '%s')
-                    IF NOT EXISTS
+                    VALUES ('%s', %s, '%s', '%s')
                     USING TTL %d;
                     """ % (self.incomplete,
                     decoded['player_id'],
                     decoded['session_id'],
                     decoded['country'],
-                    decoded['start_time'].replace('T', " ")[:-3], # format timestamp
+                    decoded['ts'].replace('T', " ")[:-3], # format timestamp
                     PlayerSessionService.YEAR_IN_SECONDS)
 
             # End event
             else:
-                cql_request = """
+                cql_insert = """
                     INSERT INTO %s (player_id, session_id, end_time) 
                     VALUES ('%s', %s, '%s')
-                    IF NOT EXISTS
                     USING TTL %d;
                     """ % (self.incomplete,
                     decoded['player_id'],
                     decoded['session_id'],
-                    decoded['end_time'].replace('T', " ")[:-3], # format timestamp
+                    decoded['ts'].replace('T', " ")[:-3], # format timestamp
                     PlayerSessionService.YEAR_IN_SECONDS)
 
-            # insert the entry
-            self.session.execute_async(cql_request) # asynchronous
+            # Execute the insertion request
+            self.session.execute(cql_insert)
+
+            # Look if the session is completed
+            cql_check_completion = """
+                SELECT * FROM %s
+                WHERE player_id='%s' AND session_id=%s;
+            """ % (self.incomplete, decoded['player_id'], decoded['session_id'])
+
+            rows = self.session.execute(cql_check_completion)
+            for row in rows:
+                # start time and end time are present
+                if row.start_time and row.end_time:
+                    
+                    # start time is later than end time
+                    if not row.start_time < row.end_time:
+                        raise AttributeError(
+                            "Start timestamp is later than end timestamp in session_id: %s"
+                            % (decoded['session_id']))
+
+                    # insert this session into the completed table
+                    self.session.execute_async("""
+                        INSERT INTO %s ( player_id, session_id, country, start_time, end_time)
+                        VALUES (
+                            '%s', %s, '%s', '%s', '%s'
+                        )
+                        USING TTL %d;
+                        """ % (self.completed,
+                        row.player_id,
+                        row.session_id,
+                        row.country,
+                        str(row.start_time)[:-3],
+                        str(row.end_time)[:-3],
+                        PlayerSessionService.YEAR_IN_SECONDS))
+
+                    # delete the complete session from the incomplete table
+                    cql_delete = "DELETE FROM %s WHERE player_id='%s' AND session_id=%s;"\
+                        % (self.incomplete, row.player_id, str(row.session_id))
+                    self.session.execute_async(cql_delete)
+                    
 
     def fetch(self, player_id):
         """ Returns the last 20 completed sessions for the given player
+            Takes:
+                player_id: a string representing the player
+            Return type is a JSON object:
+                list of {player_id:'player_id', session_id:'session_id', country:'country',
+                start_time:'start timestamp', end_time:'end timestamp'}
         """
+        result = self.session.execute("""
+            SELECT * FROM %s
+            WHERE player_id=%s
+            LIMIT 20;
+            """ % (self.completed, player_id))
 
-
-        pass
+        return json.dumps(result)
             
 
 
@@ -138,7 +183,7 @@ if __name__ == "__main__":
     print("Performs basic test")
 
     # instantiate a service object
-    pss = PlayerSessionService('tutorialspoint')
+    pss = PlayerSessionService('test')
 
     # test the receive function
     def test_receive():
@@ -165,6 +210,6 @@ if __name__ == "__main__":
             }
         """
         my_events = [e1, e2]
-        pss.receive_events(my_events)
+        pss.receive_events(json.dumps(my_events))
 
     test_receive()

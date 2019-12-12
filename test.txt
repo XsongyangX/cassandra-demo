@@ -18,3 +18,5 @@ SET
     session_id=4a0c43c9-c43a-42ff-ba55-67563dfa35d4,
     end_time='2016-12-02 12:49:05.520'
 WHERE player_id = 'abc123' AND session_id=4a0c43c9-c43a-42ff-ba55-67563dfa35d4;
+
+"\n                        DELETE FROM test_incomplete\n                        WHERE player_id='0a2d12a1a7e145de8bae44c0c6e06629' AND session_id=4a0c43c9-c43a-42ff-ba55-67563dfa35d4;\n                        "
