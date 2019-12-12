@@ -1,2 +1,4 @@
 .ipynb_checkpoints/
 settings.json
+.vscode
+launch.json
