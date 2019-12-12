@@ -1,3 +1,20 @@
-Hewwo my name is Woo
-Do you like me?
-Please say yes!
+CREATE TABLE IF NOT EXISTS test_table(
+    session_id uuid,
+    player_id ascii,
+    country text,
+    start_time timestamp,
+    end_time timestamp,
+    PRIMARY KEY((player_id), end_time)
+)
+WITH CLUSTERING ORDER BY(end_time DESC);
+
+INSERT INTO test_table (player_id, end_time)
+VALUES ('abc123', '2016-12-02 12:49:05.520') IF NOT EXISTS
+USING TTL 3600;
+
+UPDATE test_table 
+USING TTL 3600
+SET 
+    session_id=4a0c43c9-c43a-42ff-ba55-67563dfa35d4,
+    end_time='2016-12-02 12:49:05.520'
+WHERE player_id = 'abc123' AND session_id=4a0c43c9-c43a-42ff-ba55-67563dfa35d4;
