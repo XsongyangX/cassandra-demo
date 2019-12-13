@@ -3,6 +3,11 @@ import json, yaml
 import Queue
 import time, threading
 
+""" Session service module to interact with Cassandra cluster.
+
+    Only works with Session JSON objects given in the right format.
+"""
+
 class Waiter(threading.Thread):
     """ A waiter thread that waits for every async execution to end
            
@@ -35,7 +40,10 @@ class Waiter(threading.Thread):
             future.add_errback(handle_error)
 
 class PlayerSessionService(object):
-
+    """ A Python class that can instantiate a service that connects to a Cassandra cluster.
+        To scale up the load of the application, it is recommended to instantiate as many
+        PlayerSessionService as needed and run them in parallel.
+    """
     YEAR_IN_SECONDS = 31556952 # time to live (TTL)
 
     def __init__(self, keyspace, cluster_address=None):
