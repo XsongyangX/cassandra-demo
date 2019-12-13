@@ -1,5 +1,38 @@
 from cassandra.cluster import Cluster
 import json, yaml
+import Queue
+import time, threading
+
+class Waiter(threading.Thread):
+    """ A waiter thread that waits for every async execution to end
+           
+        The waiter ends when the flag is_shutting_down is True.
+    """
+    def __init__(self, queue):
+        threading.Thread.__init__(self)
+        self.is_shutting_down = False
+        self.futures = queue
+
+    def run(self):
+        """ Waits for every asynchronous execution in FIFO mode
+        """
+        def handle_error(error):
+            print("Async execution error: %s" % str(error))
+
+        # if the flag is false
+        while not self.is_shutting_down:
+
+            if not self.futures.empty():
+                future = self.futures.get()
+                future.add_errback(handle_error) # handle error messages
+
+            else:
+                time.sleep(1) # queue is empty
+
+        # if the flag is true, process the rest of the queue
+        while not self.futures.empty():
+            future = self.futures.get()
+            future.add_errback(handle_error)
 
 class PlayerSessionService(object):
 
@@ -12,8 +45,11 @@ class PlayerSessionService(object):
                 cluster_address=None : an array of IP addresses to cluster nodes
         """
 
-        # For multithreading
-        self.futures = []
+        # For multithreading, a parallel thread will wait for all asynchronous cql requests
+        # to end. The parallel thread will end itself when self.shutdown is called.
+        self.futures = Queue.Queue()
+        self.waiter = Waiter(self.futures)
+        self.waiter.start()
 
         # May need to authenticate
         if cluster_address is not None:
@@ -148,7 +184,7 @@ class PlayerSessionService(object):
                             % (row.start_time, row.end_time, decoded['session_id']))
 
                     # insert this session into the completed table
-                    self.futures.append(self.session.execute_async("""
+                    self.futures.put(self.session.execute_async("""
                         INSERT INTO %s ( player_id, session_id, country, start_time, end_time)
                         VALUES (
                             '%s', %s, '%s', '%s', '%s'
@@ -165,7 +201,7 @@ class PlayerSessionService(object):
                     # delete the complete session from the incomplete table
                     cql_delete = "DELETE FROM %s WHERE player_id='%s' AND session_id=%s;"\
                         % (self.incomplete, row.player_id, str(row.session_id))
-                    self.futures.append(self.session.execute_async(cql_delete))
+                    self.futures.put(self.session.execute_async(cql_delete))
                     
 
     def fetch(self, player_id):
@@ -184,15 +220,13 @@ class PlayerSessionService(object):
             """ % (self.completed, player_id))
 
         return json.dumps(list(result))
-            
+
+
     def shutdown(self):
         """ Shuts down the service by waiting for all threads to finish
         """
-        def handle_error(error):
-            print("Async execution error: %s" % str(error))
-
-        for thread in self.futures:
-            thread.add_errback(handle_error)
+        self.waiter.is_shutting_down = True
+        self.waiter.join()
 
 
 if __name__ == "__main__":
